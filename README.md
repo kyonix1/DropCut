@@ -49,6 +49,7 @@ Server-Route `api/spots.js`.
 ### Einmalige Einrichtung in Vercel
 
 1. Im Vercel-Projekt auf **Storage → Create Database → Blob**
+   und einen **Public Blob Store** anlegen
 2. Den Blob-Store mit dem Projekt verbinden (Connect Project)
 3. Neu deployen
 
@@ -56,8 +57,26 @@ Vercel setzt dabei automatisch `BLOB_READ_WRITE_TOKEN`. Ab dann speichert der
 Button für **alle Besucher sichtbar**, und die Markierungen bleiben nach einem
 Reload erhalten.
 
-**Ohne Blob-Store** funktioniert die Seite trotzdem: Es wird im Browser
-(localStorage) gespeichert und der Hinweis „Gespeichert (nur lokal)" angezeigt.
+Die Requests werden als einzelne Dateien unter `dropspots/requests/` gespeichert.
+Dadurch koennen mehrere Besucher gleichzeitig Anfragen senden, ohne sich
+gegenseitig zu ueberschreiben. Der Editor aktualisiert den Posteingang alle
+15 Sekunden und beim Zurueckkehren in den Browser-Tab.
+
+Nach Aenderungen an den API-Dateien muss das Projekt **neu deployed** werden.
+Der direkte Test `https://DEINE-DOMAIN.vercel.app/api/requests` muss danach
+`{"requests":[]}` (oder eine Liste) liefern. Ein Fehler 503 bedeutet, dass der
+Blob Store noch nicht mit genau diesem Vercel-Projekt verbunden ist.
+
+**Es gibt bewusst keinen lokalen Speicher.** Der Server ist die einzige Quelle
+der Wahrheit: Was gespeichert wird, sehen alle Besucher. Schlägt das Speichern
+fehl, erscheint eine klare Fehlermeldung und die Änderung gilt weiterhin als
+ungespeichert — sie wird also nicht fälschlich nur bei dir angezeigt.
+
+Ohne verbundenen Blob-Store meldet der Speichern-Button
+„Nicht veröffentlicht · Blob-Store fehlt".
+
+Besucher sehen veröffentlichte Änderungen automatisch: Die Karte aktualisiert
+sich alle 20 Sekunden und beim Zurückkehren in den Browser-Tab.
 
 ### Schreibschutz (empfohlen)
 

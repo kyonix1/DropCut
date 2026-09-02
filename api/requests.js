@@ -1,95 +1,109 @@
-import { head, put } from '@vercel/blob';
+import { del, list, put } from '@vercel/blob';
 
-// Änderungsanfragen (Requests) von Besuchern.
-//
-//   GET   /api/requests            → alle offenen Anfragen
-//   POST  /api/requests            → neue Anfrage einreichen (offen für alle)
-//   POST  /api/requests?action=... → verwalten (nur mit Editor-Key)
-//         action=reject&id=…       → eine Anfrage ablehnen
-//         action=rejectAll         → alle ablehnen
-//         action=remove&id=…       → nach dem Annehmen entfernen
+// Jede Anfrage liegt als eigener, unveraenderlicher Blob. Dadurch gehen bei
+// gleichzeitigen Einsendungen keine Requests durch "last write wins" verloren.
+const PREFIX = 'dropspots/requests/';
 
-const BLOB_NAME = 'dropspots/requests.json';
+const hasStore = () =>
+  Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN ||
+      process.env.BLOB_STORE_ID ||
+      process.env.VERCEL_OIDC_TOKEN
+  );
 
 async function readAll() {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return [];
-  try {
-    const meta = await head(BLOB_NAME).catch(() => null);
-    if (!meta?.url) return [];
-    const r = await fetch(`${meta.url}?t=${Date.now()}`, { cache: 'no-store' });
-    if (!r.ok) return [];
-    const d = await r.json();
-    return Array.isArray(d?.requests) ? d.requests : [];
-  } catch {
-    return [];
-  }
+  const { blobs } = await list({ prefix: PREFIX, limit: 1000 });
+  const rows = await Promise.all(
+    blobs.map(async (blob) => {
+      try {
+        const response = await fetch(blob.url, { cache: 'no-store' });
+        return response.ok ? await response.json() : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return rows
+    .filter((item) => item && typeof item.id === 'string' && Array.isArray(item.shapes))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-async function writeAll(requests) {
-  await put(BLOB_NAME, JSON.stringify({ requests }), {
-    access: 'public',
-    contentType: 'application/json',
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    cacheControlMaxAge: 0,
-  });
+function requireEditor(req, res) {
+  const required = process.env.EDIT_KEY;
+  if (required && req.headers['x-edit-key'] !== required) {
+    res.status(401).json({ error: 'Kein Zugriff' });
+    return false;
+  }
+  return true;
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-edit-key');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
-
-  const hasBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-
-  if (req.method === 'GET') {
-    res.setHeader('Cache-Control', 'no-store, max-age=0');
-    return res.status(200).json({ requests: await readAll() });
+  if (!hasStore()) {
+    return res.status(503).json({ error: 'Vercel Blob ist nicht mit dem Projekt verbunden' });
   }
 
-  if (req.method === 'POST') {
-    if (!hasBlob) return res.status(503).json({ error: 'Kein Blob-Store verbunden' });
+  try {
+    if (req.method === 'GET') {
+      return res.status(200).json({ requests: await readAll() });
+    }
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Methode nicht erlaubt' });
+    }
 
-    const action = req.query?.action;
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
-
-    // ── Verwaltung: Editor-Key nötig ──
+    const action = Array.isArray(req.query?.action) ? req.query.action[0] : req.query?.action;
     if (action) {
-      const required = process.env.EDIT_KEY;
-      if (required && req.headers['x-edit-key'] !== required) {
-        return res.status(401).json({ error: 'Kein Zugriff' });
+      if (!requireEditor(req, res)) return;
+      const id = Array.isArray(req.query?.id) ? req.query.id[0] : req.query?.id;
+
+      if (action === 'rejectAll') {
+        const { blobs } = await list({ prefix: PREFIX, limit: 1000 });
+        if (blobs.length) await del(blobs.map((blob) => blob.url));
+        return res.status(200).json({ ok: true });
       }
-      let list = await readAll();
-      if (action === 'rejectAll') list = [];
-      else if (action === 'reject' || action === 'remove') {
-        const id = req.query.id;
-        list = list.filter((r) => r.id !== id);
-      } else {
-        return res.status(400).json({ error: 'Unbekannte Aktion' });
+
+      if ((action === 'reject' || action === 'remove') && id) {
+        const safeId = String(id).replace(/[^a-z0-9-]/gi, '');
+        if (!safeId) return res.status(400).json({ error: 'Ungueltige ID' });
+        await del(`${PREFIX}${safeId}.json`);
+        return res.status(200).json({ ok: true });
       }
-      await writeAll(list);
-      return res.status(200).json({ ok: true, requests: list });
+      return res.status(400).json({ error: 'Unbekannte Aktion' });
     }
 
-    // ── Neue Anfrage einreichen ──
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     if (!Array.isArray(body.shapes) || body.shapes.length === 0) {
-      return res.status(400).json({ error: 'Keine Änderungen enthalten' });
+      return res.status(400).json({ error: 'Keine Aenderungen enthalten' });
     }
-    const list = await readAll();
-    if (list.length >= 200) return res.status(429).json({ error: 'Zu viele offene Anfragen' });
 
+    const { blobs } = await list({ prefix: PREFIX, limit: 201 });
+    if (blobs.length >= 200) {
+      return res.status(429).json({ error: 'Zu viele offene Anfragen' });
+    }
+
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
     const entry = {
-      id: Math.random().toString(36).slice(2, 10),
+      id,
       createdAt: new Date().toISOString(),
       note: typeof body.note === 'string' ? body.note.slice(0, 200) : '',
       shapes: body.shapes.slice(0, 500),
     };
-    list.push(entry);
-    await writeAll(list);
-    return res.status(200).json({ ok: true, id: entry.id });
-  }
 
-  return res.status(405).json({ error: 'Methode nicht erlaubt' });
+    await put(`${PREFIX}${id}.json`, JSON.stringify(entry), {
+      access: 'public',
+      contentType: 'application/json',
+      addRandomSuffix: false,
+      cacheControlMaxAge: 60,
+    });
+    return res.status(200).json({ ok: true, id });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

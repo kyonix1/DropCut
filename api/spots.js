@@ -1,76 +1,88 @@
-import { head, put } from '@vercel/blob';
+import { del, head, list, put } from '@vercel/blob';
 
-// Serverless-Speicher für die Dropspot-Markierungen.
-//
-//   GET   /api/spots  → aktuelle Markierungen (JSON)
-//   POST  /api/spots  → Markierungen speichern (JSON im Body)
-//
-// Speicher: Vercel Blob. Dafür in Vercel unter Storage einen Blob-Store
-// anlegen und mit dem Projekt verbinden — die Variable BLOB_READ_WRITE_TOKEN
-// wird dann automatisch gesetzt.
-//
-// Schreibschutz: optional die Umgebungsvariable EDIT_KEY setzen. Ist sie
-// gesetzt, muss der Client denselben Key im Header x-edit-key senden.
-
-const BLOB_NAME = 'dropspots/spots.json';
+// Versionierte Dateien statt eines ueberschriebenen CDN-Pfads. So liefert GET
+// sofort die neueste Version und nicht bis zu 60 Sekunden alte Daten.
+const PREFIX = 'dropspots/published/';
+const LEGACY_NAME = 'dropspots/spots.json';
 const EMPTY = { version: 1, updatedAt: '', shapes: [] };
+
+const hasStore = () =>
+  Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN ||
+      process.env.BLOB_STORE_ID ||
+      process.env.VERCEL_OIDC_TOKEN
+  );
+
+async function readLatest() {
+  const { blobs } = await list({ prefix: PREFIX, limit: 100 });
+  const sorted = blobs.sort(
+    (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+  );
+  if (sorted[0]?.url) {
+    const response = await fetch(sorted[0].url, { cache: 'no-store' });
+    if (response.ok) return response.json();
+  }
+
+  const legacy = await head(LEGACY_NAME).catch(() => null);
+  if (legacy?.url) {
+    const response = await fetch(legacy.url, { cache: 'no-store' });
+    if (response.ok) return response.json();
+  }
+  return EMPTY;
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-edit-key');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
-
-  const hasBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-
-  // ── Lesen ──
-  if (req.method === 'GET') {
-    res.setHeader('Cache-Control', 'no-store, max-age=0');
-    if (!hasBlob) return res.status(200).json(EMPTY);
-    try {
-      const meta = await head(BLOB_NAME).catch(() => null);
-      if (!meta?.url) return res.status(200).json(EMPTY);
-      const r = await fetch(`${meta.url}?t=${Date.now()}`, { cache: 'no-store' });
-      if (!r.ok) return res.status(200).json(EMPTY);
-      return res.status(200).json(await r.json());
-    } catch {
-      return res.status(200).json(EMPTY);
-    }
+  if (!hasStore()) {
+    return res.status(503).json({ error: 'Vercel Blob ist nicht mit dem Projekt verbunden' });
   }
 
-  // ── Schreiben ──
-  if (req.method === 'POST') {
+  try {
+    if (req.method === 'GET') {
+      return res.status(200).json(await readLatest());
+    }
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Methode nicht erlaubt' });
+    }
+
     const required = process.env.EDIT_KEY;
     if (required && req.headers['x-edit-key'] !== required) {
       return res.status(401).json({ error: 'Kein Zugriff' });
     }
-    if (!hasBlob) {
-      return res.status(503).json({ error: 'Kein Blob-Store verbunden' });
+
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (!body || !Array.isArray(body.shapes)) {
+      return res.status(400).json({ error: 'Ungueltige Daten' });
     }
 
-    try {
-      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      if (!body || !Array.isArray(body.shapes)) {
-        return res.status(400).json({ error: 'Ungültige Daten' });
-      }
-      const doc = {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        shapes: body.shapes.slice(0, 5000),
-      };
-      await put(BLOB_NAME, JSON.stringify(doc), {
-        access: 'public',
-        contentType: 'application/json',
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        cacheControlMaxAge: 0,
-      });
-      return res.status(200).json({ ok: true, updatedAt: doc.updatedAt });
-    } catch (e) {
-      return res.status(500).json({ error: String(e?.message || e) });
-    }
+    const doc = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      shapes: body.shapes.slice(0, 5000),
+    };
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    await put(`${PREFIX}${id}.json`, JSON.stringify(doc), {
+      access: 'public',
+      contentType: 'application/json',
+      addRandomSuffix: false,
+      cacheControlMaxAge: 60,
+    });
+
+    const { blobs } = await list({ prefix: PREFIX, limit: 100 });
+    const old = blobs
+      .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
+      .slice(10);
+    if (old.length) await del(old.map((blob) => blob.url));
+
+    return res.status(200).json({ ok: true, updatedAt: doc.updatedAt });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
-
-  return res.status(405).json({ error: 'Methode nicht erlaubt' });
 }

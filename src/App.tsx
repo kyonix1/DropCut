@@ -77,13 +77,31 @@ export default function App() {
     return () => ac.abort();
   }, [attempt]);
 
-  useEffect(() => {
-    loadDoc().then(({ doc }) => {
-      setDoc(doc);
-      savedShapes.current = doc.shapes;
-      setHistory([]);
-    });
+  const refreshDoc = useCallback(async () => {
+    const { doc: fresh } = await loadDoc();
+    setDoc(fresh);
+    savedShapes.current = fresh.shapes;
+    setHistory([]);
   }, []);
+
+  useEffect(() => {
+    refreshDoc();
+  }, [refreshDoc]);
+
+  // Besucher sehen veroeffentlichte Aenderungen ohne Neuladen. Waehrend des
+  // Bearbeitens wird nicht aktualisiert, damit nichts ueberschrieben wird.
+  useEffect(() => {
+    if (mode !== 'view') return;
+    const timer = window.setInterval(refreshDoc, 20000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshDoc();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [mode, refreshDoc]);
 
   useEffect(() => {
     if (map) {
@@ -94,12 +112,32 @@ export default function App() {
 
   const refreshRequests = useCallback(async () => {
     setReqBusy(true);
-    setRequests(await loadRequests());
+    const result = await loadRequests();
+    setRequests(result.requests);
+    if (result.error) {
+      setToast(result.error);
+      setTimeout(() => setToast(null), 5000);
+    }
     setReqBusy(false);
   }, []);
 
   useEffect(() => {
     if (mode === 'edit') refreshRequests();
+  }, [mode, refreshRequests]);
+
+  // Neue Anfragen anderer Besucher erscheinen automatisch. Auch nach dem
+  // Zurueckkehren in den Tab wird sofort aktualisiert.
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    const timer = window.setInterval(refreshRequests, 15000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshRequests();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [mode, refreshRequests]);
 
   const isRequest = mode === 'request';
@@ -208,7 +246,10 @@ export default function App() {
     setSaved(res.ok);
     setDirty(!res.ok);
     if (res.ok) {
-      savedShapes.current = doc.shapes;
+      // Den vom Server bestaetigten Stand uebernehmen — genau das sehen alle
+      const published = res.doc ?? doc;
+      setDoc(published);
+      savedShapes.current = published.shapes;
       setHistory([]);
     }
     flash(res.message);
@@ -221,8 +262,9 @@ export default function App() {
       setSaving(true);
       const res = await submitRequest(draftShapes, note);
       setSaving(false);
-      setSaved(true);
       flash(res.message);
+      if (!res.ok) return;
+      setSaved(true);
       setTimeout(() => {
         setSaved(false);
         setDraftShapes([]);
@@ -242,14 +284,19 @@ export default function App() {
       const next = { ...doc, shapes: merged };
       const res = await saveDoc(next, EDIT_KEY);
       if (res.ok) {
-        setDoc(next);
-        savedShapes.current = merged;
+        const published = res.doc ?? next;
+        setDoc(published);
+        savedShapes.current = published.shapes;
         setHistory([]);
         setDirty(false);
-        await removeRequest(r.id, EDIT_KEY);
-        setRequests((list) => list.filter((x) => x.id !== r.id));
-        if (previewId === r.id) setPreviewId(null);
-        flash('Anfrage übernommen');
+        const removed = await removeRequest(r.id, EDIT_KEY);
+        if (removed) {
+          setRequests((list) => list.filter((x) => x.id !== r.id));
+          if (previewId === r.id) setPreviewId(null);
+          flash('Anfrage übernommen');
+        } else {
+          flash('Änderung gespeichert · Anfrage konnte nicht entfernt werden');
+        }
       } else {
         flash(res.message);
       }
@@ -261,7 +308,12 @@ export default function App() {
   const declineRequest = useCallback(
     async (r: SpotRequest) => {
       setReqBusy(true);
-      await rejectRequest(r.id, EDIT_KEY);
+      const ok = await rejectRequest(r.id, EDIT_KEY);
+      if (!ok) {
+        setReqBusy(false);
+        flash('Anfrage konnte nicht abgelehnt werden');
+        return;
+      }
       setRequests((list) => list.filter((x) => x.id !== r.id));
       if (previewId === r.id) setPreviewId(null);
       setReqBusy(false);
@@ -272,7 +324,12 @@ export default function App() {
 
   const declineAll = useCallback(async () => {
     setReqBusy(true);
-    await rejectAllRequests(EDIT_KEY);
+    const ok = await rejectAllRequests(EDIT_KEY);
+    if (!ok) {
+      setReqBusy(false);
+      flash('Anfragen konnten nicht abgelehnt werden');
+      return;
+    }
     setRequests([]);
     setPreviewId(null);
     setReqBusy(false);

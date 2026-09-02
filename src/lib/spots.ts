@@ -54,13 +54,12 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 // ─── Persistenz ──────────────────────────────────────────────────────────────
 //
-// Speichern geht immer direkt auf der Website:
-//   1. /api/spots  — Server-Route (für alle Besucher sichtbar)
-//   2. localStorage — Fallback, falls kein Server verfügbar ist
+// Der Server ist die einzige Quelle der Wahrheit. Es gibt bewusst KEINEN
+// lokalen Speicher: Was gespeichert wird, sehen alle Besucher — und was nicht
+// gespeichert werden konnte, wird auch lokal nicht als gespeichert angezeigt.
 //
-// Geladen wird: Server → public/spots.json → lokale Kopie (neueste gewinnt).
+// Geladen wird: /api/spots → public/spots.json (Startbestand im Repo).
 
-const LS_KEY = 'dropspots_doc_v1';
 const REMOTE: string =
   (import.meta as { env?: Record<string, string> }).env?.VITE_SPOTS_API || '/api/spots';
 
@@ -79,65 +78,47 @@ function sanitize(raw: unknown): SpotDoc {
   };
 }
 
-export async function loadDoc(): Promise<{ doc: SpotDoc; source: 'remote' | 'published' | 'local' | 'empty' }> {
-  // 1. Server
-  let remote: SpotDoc | null = null;
+export async function loadDoc(): Promise<{
+  doc: SpotDoc;
+  source: 'remote' | 'published' | 'empty';
+}> {
+  // 1. Server — der veroeffentlichte Stand fuer alle
   try {
     const r = await fetch(REMOTE, { cache: 'no-store' });
     if (r.ok) {
       const d = sanitize(await r.json());
-      if (d.shapes.length > 0 || d.updatedAt) remote = d;
+      if (d.shapes.length > 0 || d.updatedAt) return { doc: d, source: 'remote' };
     }
   } catch {
-    /* weiter */
+    /* weiter zum Startbestand */
   }
 
-  // 2. veröffentlichte Datei im Repo
-  let published: SpotDoc | null = null;
+  // 2. Startbestand aus dem Repo
   try {
     const r = await fetch(`spots.json?t=${Date.now()}`, { cache: 'no-store' });
-    if (r.ok) published = sanitize(await r.json());
+    if (r.ok) {
+      const d = sanitize(await r.json());
+      if (d.shapes.length > 0) return { doc: d, source: 'published' };
+    }
   } catch {
-    /* weiter */
+    /* leer starten */
   }
 
-  // 3. lokale Arbeitskopie — nur wenn neuer als die veröffentlichte
-  let local: SpotDoc | null = null;
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) local = sanitize(JSON.parse(raw));
-  } catch {
-    /* weiter */
-  }
-
-  // Neuesten Stand gewinnen lassen
-  const cands: { doc: SpotDoc; source: 'remote' | 'published' | 'local' }[] = [];
-  if (remote) cands.push({ doc: remote, source: 'remote' });
-  if (published) cands.push({ doc: published, source: 'published' });
-  if (local) cands.push({ doc: local, source: 'local' });
-  if (cands.length === 0) return { doc: emptyDoc(), source: 'empty' };
-
-  cands.sort((a, b) => (b.doc.updatedAt || '').localeCompare(a.doc.updatedAt || ''));
-  return cands[0];
+  return { doc: emptyDoc(), source: 'empty' };
 }
 
 export interface SaveResult {
   ok: boolean;
   remote: boolean;
   message: string;
+  /** Der vom Server bestaetigte Stand, den jetzt alle sehen */
+  doc?: SpotDoc;
 }
 
 export async function saveDoc(doc: SpotDoc, editKey?: string): Promise<SaveResult> {
   const payload: SpotDoc = { ...doc, updatedAt: new Date().toISOString() };
 
-  // Immer lokal sichern, damit nichts verloren geht
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(payload));
-  } catch {
-    /* Speicher voll o. ä. */
-  }
-
-  // Auf dem Server veröffentlichen
+  // Ausschliesslich auf dem Server veroeffentlichen
   try {
     const r = await fetch(REMOTE, {
       method: 'POST',
@@ -147,12 +128,32 @@ export async function saveDoc(doc: SpotDoc, editKey?: string): Promise<SaveResul
       },
       body: JSON.stringify(payload),
     });
-    if (r.ok) return { ok: true, remote: true, message: 'Gespeichert · für alle sichtbar' };
-    if (r.status === 503) return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
+    if (r.ok) {
+      // Zur Sicherheit den tatsaechlich veroeffentlichten Stand zurueckholen
+      const verified = await loadDoc();
+      return {
+        ok: true,
+        remote: true,
+        message: 'Veröffentlicht · für alle sichtbar',
+        doc: verified.source === 'remote' ? verified.doc : payload,
+      };
+    }
+    const d = await r.json().catch(() => null);
+    if (r.status === 503) {
+      return {
+        ok: false,
+        remote: false,
+        message: d?.error || 'Nicht veroeffentlicht · Blob-Store fehlt',
+      };
+    }
     if (r.status === 401) return { ok: false, remote: true, message: 'Kein Schreibrecht' };
-    return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
+    return {
+      ok: false,
+      remote: false,
+      message: d?.error || `Nicht gespeichert (Server ${r.status})`,
+    };
   } catch {
-    return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
+    return { ok: false, remote: false, message: 'Nicht veroeffentlicht · Server nicht erreichbar' };
   }
 }
 
@@ -167,44 +168,42 @@ export interface SpotRequest {
 
 const REQ_API: string =
   (import.meta as { env?: Record<string, string> }).env?.VITE_REQUESTS_API || '/api/requests';
-const REQ_LS = 'dropspots_requests_v1';
 
-function readLocalRequests(): SpotRequest[] {
-  try {
-    const raw = localStorage.getItem(REQ_LS);
-    const d = raw ? JSON.parse(raw) : null;
-    return Array.isArray(d) ? d : [];
-  } catch {
-    return [];
-  }
+export interface RequestsResult {
+  requests: SpotRequest[];
+  remote: boolean;
+  error?: string;
 }
 
-function writeLocalRequests(list: SpotRequest[]) {
-  try {
-    localStorage.setItem(REQ_LS, JSON.stringify(list));
-  } catch {
-    /* ignorieren */
-  }
-}
-
-export async function loadRequests(): Promise<SpotRequest[]> {
+export async function loadRequests(): Promise<RequestsResult> {
   try {
     const r = await fetch(REQ_API, { cache: 'no-store' });
     if (r.ok) {
       const d = await r.json();
-      if (Array.isArray(d?.requests) && d.requests.length > 0) return d.requests;
+      return {
+        requests: Array.isArray(d?.requests) ? d.requests : [],
+        remote: true,
+      };
     }
+    const d = await r.json().catch(() => null);
+    return {
+      requests: [],
+      remote: false,
+      error: d?.error || `Request-Server: ${r.status}`,
+    };
   } catch {
-    /* Fallback */
+    return {
+      requests: [],
+      remote: false,
+      error: 'Request-Server nicht erreichbar',
+    };
   }
-  return readLocalRequests();
 }
 
 export async function submitRequest(
   shapes: Shape[],
   note: string
 ): Promise<{ ok: boolean; remote: boolean; message: string }> {
-  const entry: SpotRequest = { id: newId(), createdAt: new Date().toISOString(), note, shapes };
   try {
     const r = await fetch(REQ_API, {
       method: 'POST',
@@ -212,23 +211,30 @@ export async function submitRequest(
       body: JSON.stringify({ shapes, note }),
     });
     if (r.ok) return { ok: true, remote: true, message: 'Anfrage gesendet' };
+    const d = await r.json().catch(() => null);
+    return {
+      ok: false,
+      remote: false,
+      message: d?.error || `Anfrage nicht gesendet (Server ${r.status})`,
+    };
   } catch {
-    /* Fallback */
+    return {
+      ok: false,
+      remote: false,
+      message: 'Anfrage nicht gesendet · Server nicht erreichbar',
+    };
   }
-  writeLocalRequests([...readLocalRequests(), entry]);
-  return { ok: true, remote: false, message: 'Anfrage lokal gespeichert' };
 }
 
-async function manageRequest(action: string, id: string | null, editKey: string): Promise<void> {
+async function manageRequest(action: string, id: string | null, editKey: string): Promise<boolean> {
   const url = `${REQ_API}?action=${action}${id ? `&id=${encodeURIComponent(id)}` : ''}`;
   try {
     const r = await fetch(url, { method: 'POST', headers: { 'x-edit-key': editKey } });
-    if (r.ok) return;
+    if (r.ok) return true;
   } catch {
-    /* Fallback */
+    /* Fehler wird an die UI weitergegeben */
   }
-  const list = readLocalRequests();
-  writeLocalRequests(action === 'rejectAll' ? [] : list.filter((x) => x.id !== id));
+  return false;
 }
 
 export const rejectRequest = (id: string, key: string) => manageRequest('reject', id, key);
