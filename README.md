@@ -78,6 +78,76 @@ Ohne verbundenen Blob-Store meldet der Speichern-Button
 Besucher sehen veröffentlichte Änderungen automatisch: Die Karte aktualisiert
 sich alle 20 Sekunden und beim Zurückkehren in den Browser-Tab.
 
+## Discord Map Preview
+
+Einmal pro Minute wird die Karte mit allen Markierungen als Bild in einen
+Discord-Channel gesendet. Die Nachricht besteht **nur aus dem Bild** und wird
+nach dem ersten Senden bei jeder Änderung **bearbeitet** statt neu gesendet.
+
+```
+api/discord-preview.js   rendert das PNG und hält die Discord-Nachricht aktuell
+```
+
+### Einrichtung
+
+1. **Webhook** — in Discord: Kanal bearbeiten → Integrationen → Webhook
+2. In Vercel unter **Settings → Environment Variables** setzen:
+   ```text
+   DISCORD_WEBHOOK_URL = https://discord.com/api/webhooks/…/…
+   ```
+3. Neu deployen
+
+Der Webhook steht aus Sicherheitsgruenden nicht im Quellcode. Falls ein Webhook
+einmal im Code, Chat oder GitHub-Repository veroeffentlicht wurde, muss er in
+Discord geloescht und neu erstellt werden.
+
+### Testen
+
+```text
+https://DEINE-DOMAIN.vercel.app/api/discord-preview?force=1
+```
+
+Antwort:
+
+```json
+{ "ok": true, "edited": false, "messageId": "…", "shapes": 3 }
+```
+
+- `edited: false` → erste Nachricht wurde gesendet
+- `edited: true` → vorhandene Nachricht wurde aktualisiert
+- `unchanged: true` → es gab keine Änderung, nichts gesendet
+
+### Jede Minute auf Vercel Hobby
+
+Nutze kostenlos [cron-job.org](https://cron-job.org):
+
+1. Konto erstellen und **Create Cronjob** anklicken
+2. URL: `https://DEINE-DOMAIN.vercel.app/api/discord-preview?key=DEIN_CRON_SECRET`
+3. Ausfuehrung: **Every minute**
+4. Request Method: **GET**
+5. Speichern und aktivieren
+
+Der Endpoint bearbeitet stets dieselbe Nachricht und ueberspringt den Discord-
+Aufruf komplett, wenn sich die Karte nicht geaendert hat.
+
+### Schutz des Endpoints
+
+Optional in Vercel setzen:
+
+```text
+CRON_SECRET = irgendein-geheimes-wort
+```
+
+Dann akzeptiert der Endpoint nur Anfragen mit `Authorization: Bearer …` oder
+`?key=…`. Vercel-Crons senden diesen Header automatisch. Bei einem externen
+Cron die URL dann als `…?key=irgendein-geheimes-wort` hinterlegen.
+
+Der Status (welche Discord-Nachricht bearbeitet wird) liegt unter
+`dropspots/discord-state.json` im Blob-Store — dadurch überlebt er Neustarts.
+
+Wird die Discord-Nachricht manuell gelöscht, erkennt der Endpoint das beim
+nächsten Lauf und sendet automatisch eine neue.
+
 ### Schreibschutz (empfohlen)
 
 Der Editor-Key im Frontend schützt nur die Oberfläche. Für echten Schutz in
