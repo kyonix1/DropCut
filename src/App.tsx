@@ -5,18 +5,9 @@ import LockPanel from './components/LockPanel';
 import MapView, { type Tool } from './components/MapView';
 import TextDialog from './components/TextDialog';
 import Toolbar from './components/Toolbar';
-import { Norm } from './config';
+import { EDIT_KEY, Norm } from './config';
 import { fetchMap, type MapData } from './lib/api';
-import {
-  MarkColor,
-  Shape,
-  SpotDoc,
-  downloadDoc,
-  emptyDoc,
-  loadDoc,
-  newId,
-  saveDoc,
-} from './lib/spots';
+import { MarkColor, Shape, SpotDoc, emptyDoc, loadDoc, newId, saveDoc } from './lib/spots';
 
 export default function App() {
   const [map, setMap] = useState<MapData | null>(null);
@@ -158,8 +149,7 @@ export default function App() {
 
   const onSave = useCallback(async () => {
     setSaving(true);
-    const res = await saveDoc(doc);
-    if (!res.remote) downloadDoc(doc);
+    const res = await saveDoc(doc, EDIT_KEY);
     setSaving(false);
     setSaved(res.ok);
     setDirty(!res.ok);

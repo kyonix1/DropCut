@@ -21,40 +21,38 @@ Kartendaten live von [fortnite-api.com](https://fortnite-api.com).
 **Farben:** Gelb und Rot, jeweils halbtransparent gefüllt.
 **Löschen:** Form auswählen → Papierkorb oder **Entf**.
 
-## Speichern & Veröffentlichen
+## Speichern
 
-Der **Speichern**-Button legt die Markierungen immer lokal ab. Wie sie für *alle*
-sichtbar werden, hängt von der Konfiguration ab:
+Der **Speichern**-Button sichert die Änderungen direkt auf der Website —
+kein Download, kein Deployment. Gespeichert wird über die mitgelieferte
+Server-Route `api/spots.js`.
 
-### Variante A — ohne Backend (Standard)
+### Einmalige Einrichtung in Vercel
 
-Speichern lädt eine `spots.json` herunter. Diese Datei nach
-`public/spots.json` im Repository legen und committen — Vercel deployt
-automatisch, danach sehen alle Besucher die Markierungen.
+1. Im Vercel-Projekt auf **Storage → Create Database → Blob**
+2. Den Blob-Store mit dem Projekt verbinden (Connect Project)
+3. Neu deployen
 
-```bash
-# heruntergeladene Datei ersetzen
-mv ~/Downloads/spots.json public/spots.json
-git add public/spots.json
-git commit -m "Update dropspots"
-git push
+Vercel setzt dabei automatisch `BLOB_READ_WRITE_TOKEN`. Ab dann speichert der
+Button für **alle Besucher sichtbar**, und die Markierungen bleiben nach einem
+Reload erhalten.
+
+**Ohne Blob-Store** funktioniert die Seite trotzdem: Es wird im Browser
+(localStorage) gespeichert und der Hinweis „Gespeichert (nur lokal)" angezeigt.
+
+### Schreibschutz (empfohlen)
+
+Der Editor-Key im Frontend schützt nur die Oberfläche. Für echten Schutz in
+Vercel unter **Settings → Environment Variables** setzen:
+
+```
+EDIT_KEY = I6295jn
 ```
 
-### Variante B — mit Live-Backend
+Dann akzeptiert der Server nur noch Anfragen mit diesem Key.
 
-Eine Umgebungsvariable in Vercel setzen:
-
-```
-VITE_SPOTS_API = https://dein-endpoint/spots
-```
-
-Der Endpoint muss `GET` (JSON zurückgeben) und `POST` (JSON speichern)
-unterstützen. Dann speichert der Button direkt live für alle — ohne Deployment.
-Geeignet sind z. B. Vercel KV mit einer kleinen `/api`-Route, Supabase oder
-jeder andere JSON-Store.
-
-**Ladereihenfolge:** Remote-API → `public/spots.json` → lokale Arbeitskopie
-(die lokale Version gewinnt nur, wenn sie neuer ist).
+**Ladereihenfolge:** Server → `public/spots.json` → lokale Kopie
+(der neueste Stand gewinnt).
 
 ## Editor-Key
 

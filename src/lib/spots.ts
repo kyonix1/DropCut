@@ -54,15 +54,15 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 // ─── Persistenz ──────────────────────────────────────────────────────────────
 //
-// 1. Remote-API (falls VITE_SPOTS_API gesetzt) — für alle sichtbar, live
-// 2. public/spots.json — die im Repo veröffentlichte Version (für alle sichtbar)
-// 3. localStorage — lokale Arbeitskopie
+// Speichern geht immer direkt auf der Website:
+//   1. /api/spots  — Server-Route (für alle Besucher sichtbar)
+//   2. localStorage — Fallback, falls kein Server verfügbar ist
 //
-// Ohne Remote-API bleibt der Save-Button voll funktionsfähig: er speichert
-// lokal und liefert die JSON-Datei zum Ablegen unter public/spots.json.
+// Geladen wird: Server → public/spots.json → lokale Kopie (neueste gewinnt).
 
 const LS_KEY = 'dropspots_doc_v1';
-const REMOTE: string | undefined = (import.meta as { env?: Record<string, string> }).env?.VITE_SPOTS_API;
+const REMOTE: string =
+  (import.meta as { env?: Record<string, string> }).env?.VITE_SPOTS_API || '/api/spots';
 
 function sanitize(raw: unknown): SpotDoc {
   const d = raw as Partial<SpotDoc> | null;
@@ -80,14 +80,16 @@ function sanitize(raw: unknown): SpotDoc {
 }
 
 export async function loadDoc(): Promise<{ doc: SpotDoc; source: 'remote' | 'published' | 'local' | 'empty' }> {
-  // 1. Remote
-  if (REMOTE) {
-    try {
-      const r = await fetch(REMOTE, { cache: 'no-store' });
-      if (r.ok) return { doc: sanitize(await r.json()), source: 'remote' };
-    } catch {
-      /* weiter */
+  // 1. Server
+  let remote: SpotDoc | null = null;
+  try {
+    const r = await fetch(REMOTE, { cache: 'no-store' });
+    if (r.ok) {
+      const d = sanitize(await r.json());
+      if (d.shapes.length > 0 || d.updatedAt) remote = d;
     }
+  } catch {
+    /* weiter */
   }
 
   // 2. veröffentlichte Datei im Repo
@@ -108,14 +110,15 @@ export async function loadDoc(): Promise<{ doc: SpotDoc; source: 'remote' | 'pub
     /* weiter */
   }
 
-  if (local && published) {
-    return local.updatedAt > published.updatedAt
-      ? { doc: local, source: 'local' }
-      : { doc: published, source: 'published' };
-  }
-  if (local) return { doc: local, source: 'local' };
-  if (published) return { doc: published, source: 'published' };
-  return { doc: emptyDoc(), source: 'empty' };
+  // Neuesten Stand gewinnen lassen
+  const cands: { doc: SpotDoc; source: 'remote' | 'published' | 'local' }[] = [];
+  if (remote) cands.push({ doc: remote, source: 'remote' });
+  if (published) cands.push({ doc: published, source: 'published' });
+  if (local) cands.push({ doc: local, source: 'local' });
+  if (cands.length === 0) return { doc: emptyDoc(), source: 'empty' };
+
+  cands.sort((a, b) => (b.doc.updatedAt || '').localeCompare(a.doc.updatedAt || ''));
+  return cands[0];
 }
 
 export interface SaveResult {
@@ -124,40 +127,31 @@ export interface SaveResult {
   message: string;
 }
 
-export async function saveDoc(doc: SpotDoc): Promise<SaveResult> {
+export async function saveDoc(doc: SpotDoc, editKey?: string): Promise<SaveResult> {
   const payload: SpotDoc = { ...doc, updatedAt: new Date().toISOString() };
 
+  // Immer lokal sichern, damit nichts verloren geht
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
   } catch {
     /* Speicher voll o. ä. */
   }
 
-  if (REMOTE) {
-    try {
-      const r = await fetch(REMOTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (r.ok) return { ok: true, remote: true, message: 'Für alle veröffentlicht' };
-      return { ok: false, remote: true, message: `Server ${r.status}` };
-    } catch {
-      return { ok: false, remote: true, message: 'Server nicht erreichbar' };
-    }
+  // Auf dem Server veröffentlichen
+  try {
+    const r = await fetch(REMOTE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(editKey ? { 'x-edit-key': editKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) return { ok: true, remote: true, message: 'Gespeichert · für alle sichtbar' };
+    if (r.status === 503) return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
+    if (r.status === 401) return { ok: false, remote: true, message: 'Kein Schreibrecht' };
+    return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
+  } catch {
+    return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
   }
-
-  return { ok: true, remote: false, message: 'Lokal gespeichert · JSON geladen' };
-}
-
-/** spots.json herunterladen, um sie im Repo zu veröffentlichen */
-export function downloadDoc(doc: SpotDoc) {
-  const payload: SpotDoc = { ...doc, updatedAt: new Date().toISOString() };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'spots.json';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

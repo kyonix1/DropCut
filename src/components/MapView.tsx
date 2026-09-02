@@ -101,11 +101,12 @@ export default function MapView(p: Props) {
 
   // ── Pointer ───────────────────────────────────────────────────
   const onPointerDown = (e: React.PointerEvent) => {
+    // Verhindert den nativen Bild-Drag ("Geisterbild") des Browsers
+    e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 
     // Mittlere Maustaste: immer nur bewegen, nie markieren
     if (e.button === 1) {
-      e.preventDefault();
       midPan.current = true;
       pan.current = { sx: e.clientX, sy: e.clientY, tx: viewRef.current.tx, ty: viewRef.current.ty, moved: false };
       return;
@@ -272,8 +273,12 @@ export default function MapView(p: Props) {
   return (
     <div
       ref={box}
-      className="absolute inset-0 touch-none overflow-hidden bg-deep"
+      className="mapstage absolute inset-0 touch-none overflow-hidden bg-deep"
       style={{ cursor }}
+      draggable={false}
+      onDragStart={(e) => e.preventDefault()}
+      onDrop={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -284,6 +289,8 @@ export default function MapView(p: Props) {
     >
       <div
         className="absolute origin-top-left"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
         style={{ left: view.tx, top: view.ty, width: S * view.k, height: S * view.k }}
       >
         {p.mapUrl ? (
