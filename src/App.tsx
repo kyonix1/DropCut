@@ -1,13 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { MessageSquarePlus } from 'lucide-react';
 import Intro from './components/Intro';
 import LockPanel from './components/LockPanel';
 import MapView, { type Tool } from './components/MapView';
+import RequestPanel from './components/RequestPanel';
 import TextDialog from './components/TextDialog';
 import Toolbar from './components/Toolbar';
 import { EDIT_KEY, Norm } from './config';
 import { fetchMap, type MapData } from './lib/api';
-import { MarkColor, Shape, SpotDoc, emptyDoc, loadDoc, newId, saveDoc } from './lib/spots';
+import {
+  MarkColor,
+  Shape,
+  SpotDoc,
+  SpotRequest,
+  emptyDoc,
+  loadDoc,
+  loadRequests,
+  newId,
+  rejectAllRequests,
+  rejectRequest,
+  removeRequest,
+  saveDoc,
+  submitRequest,
+} from './lib/spots';
+
+type Mode = 'view' | 'edit' | 'request';
 
 export default function App() {
   const [map, setMap] = useState<MapData | null>(null);
@@ -18,22 +36,36 @@ export default function App() {
   const [introVisible, setIntroVisible] = useState(true);
 
   const [doc, setDoc] = useState<SpotDoc>(emptyDoc());
-  /** Verlauf der Formen-Stände seit dem letzten Speichern (für Undo) */
   const [history, setHistory] = useState<Shape[][]>([]);
-  /** Stand beim letzten Speichern/Laden — Ziel des Reset-Buttons */
   const savedShapes = useRef<Shape[]>([]);
-  const [editing, setEditing] = useState(false);
+
+  const [mode, setMode] = useState<Mode>('view');
   const [tool, setTool] = useState<Tool>('pan');
   const [color, setColor] = useState<MarkColor>('yellow');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [textAt, setTextAt] = useState<Norm | null>(null);
+
+  // Request-Modus
+  const [draftShapes, setDraftShapes] = useState<Shape[]>([]);
+  const [draftHistory, setDraftHistory] = useState<Shape[][]>([]);
+  const [noteOpen, setNoteOpen] = useState(false);
+
+  // Anfragen-Verwaltung
+  const [requests, setRequests] = useState<SpotRequest[]>([]);
+  const [reqOpen, setReqOpen] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [reqBusy, setReqBusy] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Karte laden
+  const flash = (m: string) => {
+    setToast(m);
+    setTimeout(() => setToast(null), 3500);
+  };
+
   useEffect(() => {
     const ac = new AbortController();
     setErr(null);
@@ -45,7 +77,6 @@ export default function App() {
     return () => ac.abort();
   }, [attempt]);
 
-  // Markierungen laden
   useEffect(() => {
     loadDoc().then(({ doc }) => {
       setDoc(doc);
@@ -61,19 +92,38 @@ export default function App() {
     }
   }, [map]);
 
-  /** Änderung anwenden und für Undo festhalten */
-  const mutate = useCallback((fn: (shapes: Shape[]) => Shape[], group = false) => {
-    setDoc((d) => {
-      setHistory((h) => {
-        // Beim Ziehen nur den Stand vor der Geste festhalten
-        if (group && h.length > 0 && h[h.length - 1] === d.shapes) return h;
-        return [...h.slice(-99), d.shapes];
-      });
-      return { ...d, shapes: fn(d.shapes) };
-    });
-    setDirty(true);
-    setSaved(false);
+  const refreshRequests = useCallback(async () => {
+    setReqBusy(true);
+    setRequests(await loadRequests());
+    setReqBusy(false);
   }, []);
+
+  useEffect(() => {
+    if (mode === 'edit') refreshRequests();
+  }, [mode, refreshRequests]);
+
+  const isRequest = mode === 'request';
+  const editing = mode === 'edit' || isRequest;
+
+  // ── Formen bearbeiten ──
+  const mutate = useCallback(
+    (fn: (shapes: Shape[]) => Shape[], group = false) => {
+      if (isRequest) {
+        setDraftShapes((cur) => {
+          setDraftHistory((h) => (group && h.length && h[h.length - 1] === cur ? h : [...h.slice(-99), cur]));
+          return fn(cur);
+        });
+        return;
+      }
+      setDoc((d) => {
+        setHistory((h) => (group && h.length && h[h.length - 1] === d.shapes ? h : [...h.slice(-99), d.shapes]));
+        return { ...d, shapes: fn(d.shapes) };
+      });
+      setDirty(true);
+      setSaved(false);
+    },
+    [isRequest]
+  );
 
   const addShape = useCallback((s: Shape) => mutate((sh) => [...sh, s]), [mutate]);
 
@@ -83,8 +133,7 @@ export default function App() {
         (sh) =>
           sh.map((s) => {
             if (s.id !== id) return s;
-            if (s.type === 'rect') return { ...s, x: s.x + dx, y: s.y + dy };
-            if (s.type === 'text') return { ...s, x: s.x + dx, y: s.y + dy };
+            if (s.type === 'rect' || s.type === 'text') return { ...s, x: s.x + dx, y: s.y + dy };
             return { ...s, points: s.points.map((q) => ({ x: q.x + dx, y: q.y + dy })) };
           }),
         continuing
@@ -98,10 +147,18 @@ export default function App() {
     setSelectedId(null);
   }, [selectedId, mutate]);
 
-  /** Letzte Änderung rückgängig machen */
   const undo = useCallback(() => {
+    if (isRequest) {
+      setDraftHistory((h) => {
+        if (!h.length) return h;
+        setDraftShapes(h[h.length - 1]);
+        setSelectedId(null);
+        return h.slice(0, -1);
+      });
+      return;
+    }
     setHistory((h) => {
-      if (h.length === 0) return h;
+      if (!h.length) return h;
       const prev = h[h.length - 1];
       setDoc((d) => ({ ...d, shapes: prev }));
       setSelectedId(null);
@@ -109,23 +166,27 @@ export default function App() {
       setDirty(prev !== savedShapes.current);
       return h.slice(0, -1);
     });
-  }, []);
+  }, [isRequest]);
 
-  /** Alle ungespeicherten Änderungen verwerfen */
   const resetUnsaved = useCallback(() => {
-    setDoc((d) => ({ ...d, shapes: savedShapes.current }));
-    setHistory([]);
+    if (isRequest) {
+      setDraftShapes([]);
+      setDraftHistory([]);
+    } else {
+      setDoc((d) => ({ ...d, shapes: savedShapes.current }));
+      setHistory([]);
+      setDirty(false);
+    }
     setSelectedId(null);
-    setDirty(false);
     setSaved(false);
-  }, []);
+  }, [isRequest]);
 
-  // Strg+Z
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!editing) return;
       const el = document.activeElement;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         undo();
@@ -133,21 +194,14 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [editing, undo]);
+  }, [editing, deleteSelected, undo]);
 
-  // Entf-Taste
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!editing) return;
-      const el = document.activeElement;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-      if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [editing, deleteSelected]);
-
+  // ── Speichern / Abschicken ──
   const onSave = useCallback(async () => {
+    if (isRequest) {
+      setNoteOpen(true);
+      return;
+    }
     setSaving(true);
     const res = await saveDoc(doc, EDIT_KEY);
     setSaving(false);
@@ -157,10 +211,73 @@ export default function App() {
       savedShapes.current = doc.shapes;
       setHistory([]);
     }
-    setToast(res.message);
-    setTimeout(() => setToast(null), 4000);
+    flash(res.message);
     setTimeout(() => setSaved(false), 2500);
-  }, [doc]);
+  }, [doc, isRequest]);
+
+  const sendRequest = useCallback(
+    async (note: string) => {
+      setNoteOpen(false);
+      setSaving(true);
+      const res = await submitRequest(draftShapes, note);
+      setSaving(false);
+      setSaved(true);
+      flash(res.message);
+      setTimeout(() => {
+        setSaved(false);
+        setDraftShapes([]);
+        setDraftHistory([]);
+        setMode('view');
+        setTool('pan');
+      }, 900);
+    },
+    [draftShapes]
+  );
+
+  // ── Anfragen verwalten ──
+  const acceptRequest = useCallback(
+    async (r: SpotRequest) => {
+      setReqBusy(true);
+      const merged = [...doc.shapes, ...r.shapes.map((s) => ({ ...s, id: newId() }))];
+      const next = { ...doc, shapes: merged };
+      const res = await saveDoc(next, EDIT_KEY);
+      if (res.ok) {
+        setDoc(next);
+        savedShapes.current = merged;
+        setHistory([]);
+        setDirty(false);
+        await removeRequest(r.id, EDIT_KEY);
+        setRequests((list) => list.filter((x) => x.id !== r.id));
+        if (previewId === r.id) setPreviewId(null);
+        flash('Anfrage übernommen');
+      } else {
+        flash(res.message);
+      }
+      setReqBusy(false);
+    },
+    [doc, previewId]
+  );
+
+  const declineRequest = useCallback(
+    async (r: SpotRequest) => {
+      setReqBusy(true);
+      await rejectRequest(r.id, EDIT_KEY);
+      setRequests((list) => list.filter((x) => x.id !== r.id));
+      if (previewId === r.id) setPreviewId(null);
+      setReqBusy(false);
+      flash('Anfrage abgelehnt');
+    },
+    [previewId]
+  );
+
+  const declineAll = useCallback(async () => {
+    setReqBusy(true);
+    await rejectAllRequests(EDIT_KEY);
+    setRequests([]);
+    setPreviewId(null);
+    setReqBusy(false);
+    flash('Alle Anfragen abgelehnt');
+  }, []);
 
   const retry = useCallback(() => {
     setIntroVisible(true);
@@ -171,13 +288,20 @@ export default function App() {
 
   const mapUrl = !map || imgBroken ? null : imgIdx === 0 ? map.images.blank : map.images.pois;
 
+  // ── Was wird angezeigt? ──
+  const preview = requests.find((r) => r.id === previewId) ?? null;
+  const editShapes = preview ? preview.shapes : isRequest ? draftShapes : doc.shapes;
+  const baseShapes = preview ? [] : isRequest ? doc.shapes : [];
+  const interactive = editing && !preview;
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-abyss">
       <MapView
         mapUrl={mapUrl}
         onImgError={() => (imgIdx === 0 ? setImgIdx(1) : setImgBroken(true))}
-        shapes={doc.shapes}
-        editing={editing}
+        baseShapes={baseShapes}
+        shapes={editShapes}
+        editing={interactive}
         tool={tool}
         color={color}
         selectedId={selectedId}
@@ -203,21 +327,79 @@ export default function App() {
         <div className="font-disp text-sm font-semibold tracking-[0.2em] text-haze">DROPSPOTS</div>
       </motion.div>
 
-      {/* Lock rechts */}
-      <div className="absolute right-4 top-4 z-30">
-        <LockPanel
-          editing={editing}
-          onUnlock={() => setEditing(true)}
-          onLock={() => {
-            setEditing(false);
-            setTool('pan');
-            setSelectedId(null);
-          }}
-        />
+      {/* Rechte Buttons */}
+      <div className="absolute right-4 top-4 z-30 flex flex-col items-end gap-1.5">
+        {/* Request-Button für Besucher */}
+        {mode !== 'edit' && (
+          <div className="relative">
+            <button
+              type="button"
+              title={isRequest ? 'Anfrage-Modus beenden' : 'Änderung vorschlagen'}
+              onClick={() => {
+                if (isRequest) {
+                  setMode('view');
+                  setTool('pan');
+                  setDraftShapes([]);
+                  setDraftHistory([]);
+                } else {
+                  setMode('request');
+                  setTool('rect');
+                }
+                setSelectedId(null);
+              }}
+              className={`flex h-9 items-center gap-2 rounded-md border px-3 transition-colors ${
+                isRequest
+                  ? 'cursor-pointer border-volt/60 bg-volt/10 text-volt'
+                  : 'cursor-pointer border-volt/15 bg-abyss/90 text-haze/80 hover:border-volt/50 hover:text-volt'
+              }`}
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+              <span className="num text-[10px] uppercase tracking-[0.16em]">Request</span>
+            </button>
+          </div>
+        )}
+
+        {/* Anfragen-Posteingang für Editoren */}
+        {mode === 'edit' && (
+          <div className="relative">
+            <RequestPanel
+              open={reqOpen}
+              onToggle={() => setReqOpen((v) => !v)}
+              requests={requests}
+              previewId={previewId}
+              onPreview={setPreviewId}
+              onAccept={acceptRequest}
+              onReject={declineRequest}
+              onRejectAll={declineAll}
+              onRefresh={refreshRequests}
+              busy={reqBusy}
+            />
+          </div>
+        )}
+
+        {/* Lock unterhalb */}
+        <div className="relative">
+          <LockPanel
+            editing={mode === 'edit'}
+            onUnlock={() => {
+              setMode('edit');
+              setDraftShapes([]);
+              setDraftHistory([]);
+              setSelectedId(null);
+            }}
+            onLock={() => {
+              setMode('view');
+              setTool('pan');
+              setSelectedId(null);
+              setPreviewId(null);
+              setReqOpen(false);
+            }}
+          />
+        </div>
       </div>
 
       <Toolbar
-        visible={editing}
+        visible={editing && !preview}
         tool={tool}
         setTool={setTool}
         color={color}
@@ -225,14 +407,33 @@ export default function App() {
         selectedId={selectedId}
         onDelete={deleteSelected}
         onUndo={undo}
-        canUndo={history.length > 0}
+        canUndo={(isRequest ? draftHistory : history).length > 0}
         onReset={resetUnsaved}
         onSave={onSave}
         saving={saving}
         saved={saved}
-        dirty={dirty}
-        count={doc.shapes.length}
+        dirty={isRequest ? draftShapes.length > 0 : dirty}
+        count={editShapes.length}
+        requestMode={isRequest}
+        onCancelRequest={() => {
+          setMode('view');
+          setTool('pan');
+          setDraftShapes([]);
+          setDraftHistory([]);
+          setSelectedId(null);
+        }}
       />
+
+      {/* Hinweisleiste */}
+      {(isRequest || preview) && (
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-md border border-volt/25 bg-abyss/95 px-3 py-2">
+          <span className="num text-[10px] uppercase tracking-[0.16em] text-haze/85">
+            {preview
+              ? `Vorschau: ${preview.note || 'Anfrage'} · nur diese Änderung`
+              : 'Anfrage-Modus · deine Änderungen werden erst nach Freigabe sichtbar'}
+          </span>
+        </div>
+      )}
 
       {textAt && (
         <TextDialog
@@ -241,6 +442,17 @@ export default function App() {
             setTextAt(null);
           }}
           onCancel={() => setTextAt(null)}
+        />
+      )}
+
+      {noteOpen && (
+        <TextDialog
+          title="Beschreibung der Anfrage"
+          placeholder="z. B. Neuer Chest-Spot am Turm"
+          confirmLabel="Abschicken"
+          allowEmpty
+          onConfirm={sendRequest}
+          onCancel={() => setNoteOpen(false)}
         />
       )}
 

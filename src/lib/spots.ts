@@ -155,3 +155,82 @@ export async function saveDoc(doc: SpotDoc, editKey?: string): Promise<SaveResul
     return { ok: true, remote: false, message: 'Gespeichert (nur lokal)' };
   }
 }
+
+// ─── Änderungsanfragen ───────────────────────────────────────────────────────
+
+export interface SpotRequest {
+  id: string;
+  createdAt: string;
+  note: string;
+  shapes: Shape[];
+}
+
+const REQ_API: string =
+  (import.meta as { env?: Record<string, string> }).env?.VITE_REQUESTS_API || '/api/requests';
+const REQ_LS = 'dropspots_requests_v1';
+
+function readLocalRequests(): SpotRequest[] {
+  try {
+    const raw = localStorage.getItem(REQ_LS);
+    const d = raw ? JSON.parse(raw) : null;
+    return Array.isArray(d) ? d : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalRequests(list: SpotRequest[]) {
+  try {
+    localStorage.setItem(REQ_LS, JSON.stringify(list));
+  } catch {
+    /* ignorieren */
+  }
+}
+
+export async function loadRequests(): Promise<SpotRequest[]> {
+  try {
+    const r = await fetch(REQ_API, { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d?.requests) && d.requests.length > 0) return d.requests;
+    }
+  } catch {
+    /* Fallback */
+  }
+  return readLocalRequests();
+}
+
+export async function submitRequest(
+  shapes: Shape[],
+  note: string
+): Promise<{ ok: boolean; remote: boolean; message: string }> {
+  const entry: SpotRequest = { id: newId(), createdAt: new Date().toISOString(), note, shapes };
+  try {
+    const r = await fetch(REQ_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shapes, note }),
+    });
+    if (r.ok) return { ok: true, remote: true, message: 'Anfrage gesendet' };
+  } catch {
+    /* Fallback */
+  }
+  writeLocalRequests([...readLocalRequests(), entry]);
+  return { ok: true, remote: false, message: 'Anfrage lokal gespeichert' };
+}
+
+async function manageRequest(action: string, id: string | null, editKey: string): Promise<void> {
+  const url = `${REQ_API}?action=${action}${id ? `&id=${encodeURIComponent(id)}` : ''}`;
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'x-edit-key': editKey } });
+    if (r.ok) return;
+  } catch {
+    /* Fallback */
+  }
+  const list = readLocalRequests();
+  writeLocalRequests(action === 'rejectAll' ? [] : list.filter((x) => x.id !== id));
+}
+
+export const rejectRequest = (id: string, key: string) => manageRequest('reject', id, key);
+export const removeRequest = (id: string, key: string) => manageRequest('remove', id, key);
+export const rejectAllRequests = (key: string) => manageRequest('rejectAll', null, key);

@@ -8,6 +8,8 @@ export type Tool = 'pan' | 'rect' | 'poly' | 'text';
 interface Props {
   mapUrl: string | null;
   onImgError: () => void;
+  /** nur zur Ansicht, nicht anklickbar (z. B. veröffentlichte Spots im Request-Modus) */
+  baseShapes?: Shape[];
   shapes: Shape[];
   editing: boolean;
   tool: Tool;
@@ -226,6 +228,27 @@ export default function MapView(p: Props) {
   const cursor = p.editing && p.tool !== 'pan' ? 'crosshair' : 'default';
 
   // ── Formen rendern ────────────────────────────────────────────
+  const base = useMemo(
+    () =>
+      (p.baseShapes ?? []).map((s) => {
+        const c = COLORS[s.color];
+        if (s.type === 'rect')
+          return (
+            <rect key={`b${s.id}`} x={X(s.x)} y={X(s.y)} width={X(s.w)} height={X(s.h)}
+              fill={c.fill} stroke={c.stroke} strokeWidth={2} opacity={0.4}
+              vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }} />
+          );
+        if (s.type === 'poly')
+          return (
+            <polygon key={`b${s.id}`} points={s.points.map((q) => `${X(q.x)},${X(q.y)}`).join(' ')}
+              fill={c.fill} stroke={c.stroke} strokeWidth={2} opacity={0.4}
+              vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }} />
+          );
+        return null;
+      }),
+    [p.baseShapes]
+  );
+
   const rendered = useMemo(
     () =>
       p.shapes.map((s) => {
@@ -269,6 +292,9 @@ export default function MapView(p: Props) {
   );
 
   const texts = p.shapes.filter((s): s is Extract<Shape, { type: 'text' }> => s.type === 'text');
+  const baseTexts = (p.baseShapes ?? []).filter(
+    (s): s is Extract<Shape, { type: 'text' }> => s.type === 'text'
+  );
 
   return (
     <div
@@ -300,6 +326,7 @@ export default function MapView(p: Props) {
         )}
 
         <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
+          {base}
           {rendered}
 
           {/* Rechteck-Vorschau */}
@@ -334,6 +361,23 @@ export default function MapView(p: Props) {
             </>
           )}
         </svg>
+
+        {/* Text-Marker (nur Ansicht) */}
+        {baseTexts.map((s) => (
+          <div
+            key={`b${s.id}`}
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-[15px] font-bold opacity-40"
+            style={{
+              left: `${s.x * 100}%`,
+              top: `${s.y * 100}%`,
+              color: COLORS[s.color].text,
+              WebkitTextStroke: '3px #000',
+              paintOrder: 'stroke fill',
+            }}
+          >
+            {s.text}
+          </div>
+        ))}
 
         {/* Text-Marker */}
         {texts.map((s) => (

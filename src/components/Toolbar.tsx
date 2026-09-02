@@ -1,5 +1,18 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Hand, Loader2, Pentagon, RotateCcw, Save, Square, Trash2, Type, Undo2 } from 'lucide-react';
+import {
+  Check,
+  Hand,
+  Loader2,
+  Pentagon,
+  RotateCcw,
+  Save,
+  Send,
+  Square,
+  Trash2,
+  Type,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { COLORS, MarkColor } from '../lib/spots';
 import type { Tool } from './MapView';
 
@@ -19,6 +32,9 @@ interface Props {
   saved: boolean;
   dirty: boolean;
   count: number;
+  /** Request-Modus: Abschicken statt Speichern */
+  requestMode?: boolean;
+  onCancelRequest?: () => void;
 }
 
 const TOOLS: { id: Tool; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
@@ -114,13 +130,13 @@ export default function Toolbar(p: Props) {
             <RotateCcw className="h-4 w-4" />
           </button>
 
-          {/* Speichern */}
+          {/* Speichern / Abschicken */}
           <button
             type="button"
             onClick={p.onSave}
-            disabled={p.saving}
-            className={`flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 transition-colors ${
-              p.dirty
+            disabled={p.saving || (p.requestMode && p.count === 0)}
+            className={`flex h-9 cursor-pointer items-center gap-2 rounded-md border px-3 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              p.dirty || p.requestMode
                 ? 'border-volt/60 bg-volt/15 text-volt hover:bg-volt/25'
                 : 'border-volt/20 text-haze/70 hover:border-volt/40'
             }`}
@@ -129,13 +145,36 @@ export default function Toolbar(p: Props) {
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : p.saved ? (
               <Check className="h-4 w-4" />
+            ) : p.requestMode ? (
+              <Send className="h-4 w-4" />
             ) : (
               <Save className="h-4 w-4" />
             )}
             <span className="num text-[10px] uppercase tracking-[0.16em]">
-              {p.saving ? 'Speichert' : p.saved ? 'Gespeichert' : 'Speichern'}
+              {p.saving
+                ? p.requestMode
+                  ? 'Sendet'
+                  : 'Speichert'
+                : p.saved
+                  ? p.requestMode
+                    ? 'Gesendet'
+                    : 'Gespeichert'
+                  : p.requestMode
+                    ? 'Abschicken'
+                    : 'Speichern'}
             </span>
           </button>
+
+          {p.requestMode && (
+            <button
+              type="button"
+              title="Anfrage verwerfen"
+              onClick={p.onCancelRequest}
+              className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-transparent text-haze/70 transition-colors hover:border-redx/50 hover:text-redx"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
 
           <span className="num px-1 text-[9px] uppercase tracking-[0.14em] text-sage">{p.count}</span>
         </motion.div>

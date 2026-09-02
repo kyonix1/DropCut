@@ -20,6 +20,25 @@ Kartendaten live von [fortnite-api.com](https://fortnite-api.com).
 
 **Farben:** Gelb und Rot, jeweils halbtransparent gefüllt.
 **Löschen:** Form auswählen → Papierkorb oder **Entf**.
+**Rückgängig:** Undo-Button oder **Strg+Z** · **Reset** verwirft alles Ungespeicherte.
+**Karte bewegen:** Ziehen oder **mittlere Maustaste** (funktioniert in jedem Werkzeug).
+
+## Änderungsanfragen (Requests)
+
+Besucher ohne Key können Änderungen **vorschlagen**:
+
+1. Button **Request** rechts oben
+2. Mit denselben Werkzeugen zeichnen — die Karte zeigt bestehende Spots abgeblendet
+3. **Abschicken** → kurze Beschreibung eingeben → fertig
+
+Die Anfrage ändert noch nichts an der Karte.
+
+Im Editor-Modus erscheint ein **Posteingang** mit der Anzahl offener Anfragen:
+
+- **Auge** — zeigt nur diese eine Anfrage allein auf der Karte
+- **Annehmen** — übernimmt die Objekte und speichert sofort
+- **Ablehnen** — verwirft die Anfrage
+- **Alle ablehnen** — leert den Posteingang
 
 ## Speichern
 
