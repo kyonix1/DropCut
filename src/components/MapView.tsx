@@ -1,24 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Minus, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { Norm, Stage } from '../config';
-import type { DropResult } from '../lib/dropcalc';
+import { Locate, Minus, Plus } from 'lucide-react';
+import { Norm } from '../config';
+import { COLORS, MarkColor, Shape, newId } from '../lib/spots';
+
+export type Tool = 'pan' | 'rect' | 'poly' | 'text';
 
 interface Props {
   mapUrl: string | null;
   onImgError: () => void;
-  stage: Stage;
-  spot: Norm | null;
-  routeA: Norm | null;
-  routeB: Norm | null;
-  calc: DropResult | null;
-  onPlace: (p: Norm) => void;
-  onDragMarker: (id: 'spot' | 'a' | 'b', p: Norm) => void;
-  onReset: () => void;
-  onTogglePhys: () => void;
-  physOpen: boolean;
+  shapes: Shape[];
+  editing: boolean;
+  tool: Tool;
+  color: MarkColor;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  onAdd: (s: Shape) => void;
+  onMove: (id: string, dx: number, dy: number, continuing?: boolean) => void;
+  onRequestText: (at: Norm) => void;
 }
 
-type DragId = 'spot' | 'a' | 'b' | null;
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 export default function MapView(p: Props) {
@@ -26,10 +26,15 @@ export default function MapView(p: Props) {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
   const viewRef = useRef(view);
-  const [mouse, setMouse] = useState<{ x: number; y: number; n: Norm } | null>(null);
-  const dragMarker = useRef<DragId>(null);
-  const pan = useRef<{ sx: number; sy: number; tx: number; ty: number; moved: boolean } | null>(null);
   const fitted = useRef(false);
+
+  const [mouse, setMouse] = useState<Norm | null>(null);
+  const [draft, setDraft] = useState<{ a: Norm; b: Norm } | null>(null);
+  const [poly, setPoly] = useState<Norm[]>([]);
+
+  const pan = useRef<{ sx: number; sy: number; tx: number; ty: number; moved: boolean } | null>(null);
+  const midPan = useRef(false);
+  const dragShape = useRef<{ id: string; last: Norm; started: boolean } | null>(null);
 
   const S = Math.min(size.w, size.h);
 
@@ -52,6 +57,12 @@ export default function MapView(p: Props) {
     setView(v);
   }, [S, size]);
 
+  // Polygon abbrechen, wenn Werkzeug gewechselt wird
+  useEffect(() => {
+    setPoly([]);
+    setDraft(null);
+  }, [p.tool, p.editing]);
+
   const toNorm = useCallback(
     (cx: number, cy: number): Norm => {
       const el = box.current!.getBoundingClientRect();
@@ -70,7 +81,7 @@ export default function MapView(p: Props) {
       if (!el || S === 0) return;
       const r = el.getBoundingClientRect();
       const v = viewRef.current;
-      const k = Math.min(8, Math.max(0.85, v.k * factor));
+      const k = Math.min(10, Math.max(0.8, v.k * factor));
       const px = cx - r.left;
       const py = cy - r.top;
       const ratio = k / v.k;
@@ -81,26 +92,57 @@ export default function MapView(p: Props) {
     [S]
   );
 
-  const zoomCenter = (f: number) => zoomAt(size.w / 2, size.h / 2, f);
+  const resetView = useCallback(() => {
+    if (S === 0) return;
+    const nv = { k: 0.98, tx: (size.w - S * 0.98) / 2, ty: (size.h - S * 0.98) / 2 };
+    viewRef.current = nv;
+    setView(nv);
+  }, [S, size]);
 
+  // ── Pointer ───────────────────────────────────────────────────
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+
+    // Mittlere Maustaste: immer nur bewegen, nie markieren
+    if (e.button === 1) {
+      e.preventDefault();
+      midPan.current = true;
+      pan.current = { sx: e.clientX, sy: e.clientY, tx: viewRef.current.tx, ty: viewRef.current.ty, moved: false };
+      return;
+    }
+    if (e.button !== 0) return;
+
+    const n = toNorm(e.clientX, e.clientY);
+
+    if (p.editing && p.tool === 'rect') {
+      setDraft({ a: n, b: n });
+      return;
+    }
+    if (p.editing && (p.tool === 'poly' || p.tool === 'text')) return;
+
     pan.current = { sx: e.clientX, sy: e.clientY, tx: viewRef.current.tx, ty: viewRef.current.ty, moved: false };
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     const n = toNorm(e.clientX, e.clientY);
-    const el = box.current!.getBoundingClientRect();
-    setMouse({ x: e.clientX - el.left, y: e.clientY - el.top, n });
-    if (dragMarker.current) {
-      p.onDragMarker(dragMarker.current, n);
+    setMouse(n);
+
+    if (dragShape.current && !midPan.current) {
+      const d = dragShape.current;
+      p.onMove(d.id, n.x - d.last.x, n.y - d.last.y, d.started);
+      d.last = n;
+      d.started = true;
+      return;
+    }
+    if (draft && !midPan.current) {
+      setDraft({ a: draft.a, b: n });
       return;
     }
     const pn = pan.current;
     if (pn && e.buttons) {
       const dx = e.clientX - pn.sx;
       const dy = e.clientY - pn.sy;
-      if (Math.abs(dx) + Math.abs(dy) > 5) pn.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > 4) pn.moved = true;
       if (pn.moved) {
         const nv = { ...viewRef.current, tx: pn.tx + dx, ty: pn.ty + dy };
         viewRef.current = nv;
@@ -110,263 +152,245 @@ export default function MapView(p: Props) {
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
-    if (dragMarker.current) {
-      dragMarker.current = null;
+    // Mittlere Maustaste beendet nur das Bewegen
+    if (midPan.current || e.button === 1) {
+      midPan.current = false;
+      pan.current = null;
       return;
     }
-    if (pan.current && !pan.current.moved) p.onPlace(toNorm(e.clientX, e.clientY));
+    if (dragShape.current) {
+      dragShape.current = null;
+      return;
+    }
+
+    if (draft) {
+      const { a, b } = draft;
+      const w = Math.abs(b.x - a.x);
+      const h = Math.abs(b.y - a.y);
+      if (w > 0.002 && h > 0.002) {
+        p.onAdd({
+          id: newId(),
+          type: 'rect',
+          color: p.color,
+          x: Math.min(a.x, b.x),
+          y: Math.min(a.y, b.y),
+          w,
+          h,
+        });
+      }
+      setDraft(null);
+      return;
+    }
+
+    const n = toNorm(e.clientX, e.clientY);
+
+    if (p.editing && p.tool === 'poly') {
+      setPoly((pts) => [...pts, n]);
+      return;
+    }
+    if (p.editing && p.tool === 'text') {
+      p.onRequestText(n);
+      return;
+    }
+    if (pan.current && !pan.current.moved) p.onSelect(null);
     pan.current = null;
   };
 
-  const startDragMarker = (id: Exclude<DragId, null>) => (e: React.PointerEvent) => {
+  const finishPoly = useCallback(() => {
+    if (poly.length >= 3) {
+      p.onAdd({ id: newId(), type: 'poly', color: p.color, points: poly });
+    }
+    setPoly([]);
+  }, [poly, p]);
+
+  // Tastatur: Polygon abschließen / abbrechen
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && poly.length >= 3) finishPoly();
+      if (e.key === 'Escape') setPoly([]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [poly, finishPoly]);
+
+  const startDragShape = (id: string) => (e: React.PointerEvent) => {
+    if (!p.editing || p.tool !== 'pan') return;
     e.stopPropagation();
-    dragMarker.current = id;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    p.onSelect(id);
+    dragShape.current = { id, last: toNorm(e.clientX, e.clientY), started: false };
   };
 
-  const P = (n: Norm) => ({ left: `${n.x * 100}%`, top: `${n.y * 100}%` });
+  const X = (v: number) => v * 1000;
+  const cursor = p.editing && p.tool !== 'pan' ? 'crosshair' : 'default';
 
-  // Marker werden beim Reinzoomen etwas kleiner, bleiben aber gut erkennbar
-  const mScale = Math.min(1, Math.max(0.72, Math.pow(1 / view.k, 0.4)));
-  const px = (base: number) => `${base * mScale}px`;
+  // ── Formen rendern ────────────────────────────────────────────
+  const rendered = useMemo(
+    () =>
+      p.shapes.map((s) => {
+        const c = COLORS[s.color];
+        const sel = s.id === p.selectedId;
+        if (s.type === 'rect') {
+          return (
+            <rect
+              key={s.id}
+              x={X(s.x)}
+              y={X(s.y)}
+              width={X(s.w)}
+              height={X(s.h)}
+              fill={c.fill}
+              stroke={sel ? '#ffffff' : c.stroke}
+              strokeWidth={sel ? 3 : 2}
+              vectorEffect="non-scaling-stroke"
+              style={{ pointerEvents: p.editing ? 'auto' : 'none', cursor: p.editing ? 'move' : 'default' }}
+              onPointerDown={startDragShape(s.id)}
+            />
+          );
+        }
+        if (s.type === 'poly') {
+          return (
+            <polygon
+              key={s.id}
+              points={s.points.map((q) => `${X(q.x)},${X(q.y)}`).join(' ')}
+              fill={c.fill}
+              stroke={sel ? '#ffffff' : c.stroke}
+              strokeWidth={sel ? 3 : 2}
+              vectorEffect="non-scaling-stroke"
+              style={{ pointerEvents: p.editing ? 'auto' : 'none', cursor: p.editing ? 'move' : 'default' }}
+              onPointerDown={startDragShape(s.id)}
+            />
+          );
+        }
+        return null;
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [p.shapes, p.selectedId, p.editing, p.tool]
+  );
 
-  const routes = useMemo(() => {
-    if (!p.routeA && !p.spot) return null;
-    const X = (n: Norm) => n.x * 1000;
-    const Y = (n: Norm) => n.y * 1000;
-    const els: React.ReactNode[] = [];
-
-    if (p.routeA && p.routeB) {
-      const A = p.routeA;
-      const B = p.routeB;
-      const exit = p.calc?.exit ?? null;
-      // Bus-Route: eine klare, durchgehende Linie mit dezenter dunkler Kontur
-      els.push(
-        <line key="cas" x1={X(A)} y1={Y(A)} x2={X(B)} y2={Y(B)}
-          stroke="rgba(0,0,0,0.55)" strokeWidth={7} strokeLinecap="round" vectorEffect="non-scaling-stroke" />,
-        <line key="route" x1={X(A)} y1={Y(A)} x2={X(B)} y2={Y(B)}
-          stroke="#3d9bff" strokeWidth={3.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-      );
-      if (exit) {
-        // gefahrener Abschnitt heller hervorgehoben
-        els.push(
-          <line key="flown" x1={X(A)} y1={Y(A)} x2={X(exit)} y2={Y(exit)}
-            stroke="#bcdcff" strokeWidth={3.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-        );
-      }
-    }
-
-    if (p.calc && p.spot) {
-      const exit = p.calc.exit;
-      const spot = p.spot;
-      const cut = p.calc.cutPoint;
-      const deploy = p.calc.hasGlide ? p.calc.deployPoint : cut;
-      els.push(
-        <line key="fcas" x1={X(exit)} y1={Y(exit)} x2={X(spot)} y2={Y(spot)}
-          stroke="rgba(0,0,0,0.55)" strokeWidth={7} strokeLinecap="round" vectorEffect="non-scaling-stroke" />,
-        // Freefall bis zum Deploy
-        <line key="fall" x1={X(exit)} y1={Y(exit)} x2={X(deploy)} y2={Y(deploy)}
-          stroke="#45ff8f" strokeWidth={3.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />,
-        // Gleitphase Deploy → Cut
-        <line key="glide" x1={X(deploy)} y1={Y(deploy)} x2={X(cut)} y2={Y(cut)}
-          stroke="#b57cff" strokeWidth={3.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />,
-        <line key="cut" x1={X(cut)} y1={Y(cut)} x2={X(spot)} y2={Y(spot)}
-          stroke="#ffc25e" strokeWidth={3.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-      );
-    }
-
-    if (p.stage === 'routeB' && p.routeA && mouse) {
-      els.push(
-        <line key="ghost" x1={X(p.routeA)} y1={Y(p.routeA)} x2={mouse.n.x * 1000} y2={mouse.n.y * 1000}
-          stroke="rgba(61,155,255,0.55)" strokeWidth={3} strokeDasharray="12 10" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-      );
-    }
-    return <>{els}</>;
-  }, [p.routeA, p.routeB, p.calc, p.spot, p.stage, mouse]);
-
-  const hint =
-    p.stage === 'spot'
-      ? 'Spot'
-      : p.stage === 'routeA'
-        ? 'Route Start'
-        : p.stage === 'routeB'
-          ? 'Route Ende'
-          : 'Neue Route';
+  const texts = p.shapes.filter((s): s is Extract<Shape, { type: 'text' }> => s.type === 'text');
 
   return (
     <div
       ref={box}
-      className="absolute inset-0 cursor-none touch-none overflow-hidden bg-deep"
+      className="absolute inset-0 touch-none overflow-hidden bg-deep"
+      style={{ cursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={() => setMouse(null)}
+      onDoubleClick={() => poly.length >= 3 && finishPoly()}
+      onAuxClick={(e) => e.preventDefault()}
       onWheel={(e) => zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0012))}
     >
-      <div className="absolute origin-top-left" style={{ left: view.tx, top: view.ty, width: S * view.k, height: S * view.k }}>
+      <div
+        className="absolute origin-top-left"
+        style={{ left: view.tx, top: view.ty, width: S * view.k, height: S * view.k }}
+      >
         {p.mapUrl ? (
-          <img src={p.mapUrl} onError={p.onImgError} className="mapimg map-tint h-full w-full" alt="" draggable={false} />
+          <img src={p.mapUrl} onError={p.onImgError} className="mapimg h-full w-full" alt="" draggable={false} />
         ) : (
-          <div
-            className="h-full w-full"
-            style={{
-              background:
-                '#04160f repeating-linear-gradient(0deg, transparent 0 39px, rgba(69,255,143,0.05) 39px 40px), repeating-linear-gradient(90deg, transparent 0 39px, rgba(69,255,143,0.05) 39px 40px)',
-            }}
-          />
+          <div className="h-full w-full bg-deep" />
         )}
 
-        <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible">
-          {routes}
+        <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
+          {rendered}
+
+          {/* Rechteck-Vorschau */}
+          {draft && (
+            <rect
+              x={X(Math.min(draft.a.x, draft.b.x))}
+              y={X(Math.min(draft.a.y, draft.b.y))}
+              width={X(Math.abs(draft.b.x - draft.a.x))}
+              height={X(Math.abs(draft.b.y - draft.a.y))}
+              fill={COLORS[p.color].fill}
+              stroke={COLORS[p.color].stroke}
+              strokeWidth={2}
+              strokeDasharray="6 5"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+
+          {/* Polygon im Bau */}
+          {poly.length > 0 && (
+            <>
+              <polyline
+                points={[...poly, ...(mouse ? [mouse] : [])].map((q) => `${X(q.x)},${X(q.y)}`).join(' ')}
+                fill={poly.length >= 2 ? COLORS[p.color].fill : 'none'}
+                stroke={COLORS[p.color].stroke}
+                strokeWidth={2}
+                strokeDasharray="6 5"
+                vectorEffect="non-scaling-stroke"
+              />
+              {poly.map((q, i) => (
+                <circle key={i} cx={X(q.x)} cy={X(q.y)} r={4} fill={COLORS[p.color].stroke} vectorEffect="non-scaling-stroke" />
+              ))}
+            </>
+          )}
         </svg>
 
-        {/* Bus-Route Endpunkte */}
-        {p.routeA && <Node pos={P(p.routeA)} size={px(16)} fill="#3d9bff" onDown={startDragMarker('a')} />}
-        {p.routeB && <Node pos={P(p.routeB)} size={px(16)} fill="#3d9bff" onDown={startDragMarker('b')} />}
-
-        {/* Jump */}
-        {p.calc && <Node pos={P(p.calc.exit)} size={px(18)} fill="#ffffff" ring="#45ff8f" label="Jump" />}
-
-        {/* Deploy — nur wenn es eine echte Gleitphase gibt */}
-        {p.calc && p.calc.hasGlide && (
-          <Node pos={P(p.calc.deployPoint)} size={px(15)} fill="#b57cff" ring="#000000" label="Deploy" tint="grape" />
-        )}
-
-        {/* Cut */}
-        {p.calc && <Node pos={P(p.calc.cutPoint)} size={px(15)} fill="#ffc25e" ring="#000000" label="Cut" tint="amber" />}
-
-        {/* Spot: grüner Punkt, beim Zoomen präziser */}
-        {p.spot && (
-          <div className="absolute z-20" style={P(p.spot)} onPointerDown={startDragMarker('spot')}>
-            <div
-              className="absolute -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full bg-volt active:cursor-grabbing"
-              style={{
-                width: px(17),
-                height: px(17),
-                boxShadow: '0 0 0 2.5px rgba(0,0,0,0.75), 0 0 0 4px rgba(69,255,143,0.28)',
-              }}
-            />
-            {/* Präzisions-Kern beim Reinzoomen */}
-            {view.k > 1.6 && (
-              <div
-                className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-abyss"
-                style={{ width: px(5), height: px(5) }}
-              />
-            )}
+        {/* Text-Marker */}
+        {texts.map((s) => (
+          <div
+            key={s.id}
+            className="absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-[15px] font-bold"
+            style={{
+              left: `${s.x * 100}%`,
+              top: `${s.y * 100}%`,
+              color: COLORS[s.color].text,
+              WebkitTextStroke: '3px #000',
+              paintOrder: 'stroke fill',
+              outline: s.id === p.selectedId ? '1.5px dashed rgba(255,255,255,0.9)' : 'none',
+              outlineOffset: '3px',
+              pointerEvents: p.editing ? 'auto' : 'none',
+              cursor: p.editing && p.tool === 'pan' ? 'move' : 'default',
+            }}
+            onPointerDown={startDragShape(s.id)}
+          >
+            {s.text}
           </div>
-        )}
+        ))}
       </div>
 
-      {/* Fadenkreuz */}
-      {mouse && (
-        <div className="pointer-events-none absolute inset-0 z-20">
-          <div className="absolute top-0 h-full w-px bg-volt/12" style={{ left: mouse.x }} />
-          <div className="absolute left-0 h-px w-full bg-volt/12" style={{ top: mouse.y }} />
-          <div
-            className="absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border border-volt/40"
-            style={{ left: mouse.x, top: mouse.y }}
-          />
-          <span className="chip absolute -translate-x-1/2" style={{ left: mouse.x, top: mouse.y - 28 }}>
-            {hint}
+      {/* Polygon-Hinweis */}
+      {p.editing && p.tool === 'poly' && poly.length > 0 && (
+        <div className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-md border border-volt/25 bg-abyss/95 px-3 py-2">
+          <span className="num text-[10px] uppercase tracking-[0.16em] text-haze/85">
+            {poly.length} Punkte · Doppelklick oder Enter zum Abschließen · Esc bricht ab
           </span>
         </div>
       )}
 
-      {/* Controls — eigener Layer, löst keine Map-Klicks aus */}
+      {/* Zoom */}
       <div
-        className="absolute right-4 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-1.5"
+        className="absolute bottom-4 right-4 z-30 flex flex-col gap-1.5"
         onPointerDown={(e) => e.stopPropagation()}
-        onPointerMove={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
         onWheel={(e) => e.stopPropagation()}
       >
-        <Btn onClick={() => zoomCenter(1.4)} label="Zoom in">
+        <ZoomBtn onClick={() => zoomAt(size.w / 2, size.h / 2, 1.4)} label="Zoom in">
           <Plus className="h-4 w-4" />
-        </Btn>
-        <Btn onClick={() => zoomCenter(1 / 1.4)} label="Zoom out">
+        </ZoomBtn>
+        <ZoomBtn onClick={() => zoomAt(size.w / 2, size.h / 2, 1 / 1.4)} label="Zoom out">
           <Minus className="h-4 w-4" />
-        </Btn>
-        <Btn onClick={p.onReset} label="Zurücksetzen" danger>
-          <RotateCcw className="h-4 w-4" />
-        </Btn>
-        <Btn onClick={p.onTogglePhys} label="Physik-Werte" active={p.physOpen}>
-          <SlidersHorizontal className="h-4 w-4" />
-        </Btn>
+        </ZoomBtn>
+        <ZoomBtn onClick={resetView} label="Ansicht zurücksetzen">
+          <Locate className="h-4 w-4" />
+        </ZoomBtn>
       </div>
     </div>
   );
 }
 
-function Btn({
-  children,
-  onClick,
-  label,
-  danger,
-  active,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  label: string;
-  danger?: boolean;
-  active?: boolean;
-}) {
+function ZoomBtn({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       onClick={onClick}
-      className={`flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border bg-abyss/90 transition-colors ${
-        active ? 'border-volt/60 text-volt' : 'border-volt/15 text-haze/80'
-      } ${danger ? 'hover:border-redx/60 hover:text-redx' : 'hover:border-volt/50 hover:text-volt'}`}
+      className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-volt/15 bg-abyss/90 text-haze/80 transition-colors hover:border-volt/50 hover:text-volt"
     >
       {children}
     </button>
-  );
-}
-
-function Node({
-  pos,
-  size,
-  fill,
-  ring,
-  label,
-  tint,
-  onDown,
-}: {
-  pos: { left: string; top: string };
-  size: string;
-  fill: string;
-  ring?: string;
-  label?: string;
-  tint?: 'amber' | 'grape';
-  onDown?: (e: React.PointerEvent) => void;
-}) {
-  return (
-    <div className="absolute z-10" style={pos} onPointerDown={onDown}>
-      <div
-        className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full ${onDown ? 'cursor-grab active:cursor-grabbing' : ''}`}
-        style={{
-          width: size,
-          height: size,
-          background: fill,
-          border: `3px solid ${ring ?? 'rgba(0,0,0,0.6)'}`,
-        }}
-      />
-      {label && (
-        <span
-          className={`num pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded border px-1.5 py-[3px] text-[10px] font-semibold uppercase leading-none tracking-[0.12em] ${
-            tint === 'amber'
-              ? 'border-amberx/45 bg-abyss/92 text-amberx'
-              : tint === 'grape'
-                ? 'border-grape/50 bg-abyss/92 text-grape'
-                : 'border-volt/35 bg-abyss/92 text-haze'
-          }`}
-          style={{ top: `calc(${size} * 0.5 + 7px)` }}
-        >
-          {label}
-        </span>
-      )}
-    </div>
   );
 }

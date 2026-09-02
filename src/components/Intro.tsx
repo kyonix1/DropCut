@@ -16,22 +16,19 @@ export default function Intro({
         <motion.div
           key="intro"
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.4 }}
           className="fixed inset-0 z-[80] flex items-center justify-center bg-abyss"
         >
           <div className="flex flex-col items-center px-6 text-center">
             <svg viewBox="0 0 64 64" className="mb-6 h-12 w-12">
-              <path d="M12 37 L32 21 L52 37 L32 31 Z" fill="#45ff8f" />
-              <path d="M32 31 L32 49" stroke="#a9ffcd" strokeWidth="3.5" strokeLinecap="round" strokeDasharray="4 5" />
-              <circle cx="32" cy="53" r="3.5" fill="#45ff8f" />
+              <path d="M32 8 C22 8 15 15 15 25 C15 37 32 56 32 56 C32 56 49 37 49 25 C49 15 42 8 32 8 Z" fill="#45ff8f" />
+              <circle cx="32" cy="25" r="7" fill="#02100a" />
             </svg>
 
-            <div className="font-disp text-2xl font-semibold tracking-[0.28em] text-haze">
-              DROP<span className="text-volt">CUT</span>
+            <div className="font-disp text-2xl font-semibold tracking-[0.24em] text-haze">
+              DROP<span className="text-volt">SPOTS</span>
             </div>
-            <p className="num mt-2 text-[10px] uppercase tracking-[0.3em] text-sage">
-              Spot · Bus-Route · Glider-Cut
-            </p>
+            <p className="num mt-2 text-[10px] uppercase tracking-[0.3em] text-sage">Spot Marker</p>
 
             <div className="panel mt-8 flex min-w-[280px] items-center justify-center gap-3 rounded-md px-5 py-3">
               {error ? (
@@ -49,9 +46,7 @@ export default function Intro({
               ) : (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-volt" />
-                  <span className="num text-[11px] uppercase tracking-[0.16em] text-sage">
-                    Lade Karte von fortnite-api.com
-                  </span>
+                  <span className="num text-[11px] uppercase tracking-[0.16em] text-sage">Lade Karte</span>
                 </>
               )}
             </div>
