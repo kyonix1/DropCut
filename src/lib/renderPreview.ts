@@ -96,12 +96,12 @@ export async function renderPreview(shapes: Shape[], mapUrl: string | null): Pro
       ctx.lineJoin = 'round';
       ctx.stroke();
     } else if (s.type === 'text' && s.text) {
-      ctx.font = '700 48px Inter, "Segoe UI", sans-serif';
+      ctx.font = '700 34px Inter, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 11;
+      ctx.lineWidth = 9;
       ctx.strokeText(s.text, X(s.x), X(s.y));
       ctx.fillStyle = c.text;
       ctx.fillText(s.text, X(s.x), X(s.y));

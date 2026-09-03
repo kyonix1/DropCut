@@ -129,12 +129,12 @@ async function renderPng(shapes) {
       ctx.lineJoin = 'round';
       ctx.stroke();
     } else if (s.type === 'text' && typeof s.text === 'string' && Number.isFinite(s.x)) {
-      ctx.font = `bold 48px ${fontLoaded ? 'MarkFont' : 'sans-serif'}`;
+      ctx.font = `bold 34px ${fontLoaded ? 'MarkFont' : 'sans-serif'}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 11;
+      ctx.lineWidth = 9;
       ctx.strokeText(s.text, X(s.x), X(s.y));
       ctx.fillStyle = c.text;
       ctx.fillText(s.text, X(s.x), X(s.y));
@@ -149,10 +149,19 @@ function buildForm(png, contentType) {
   const form = new FormData();
   const name = contentType && contentType.includes('jpeg') ? 'map.jpg' : 'map.png';
   form.append('files[0]', new Blob([png], { type: contentType || 'image/png' }), name);
+  // Das Bild laeuft in einem Embed, damit es als Karte mit Rahmen angezeigt
+  // wird. Die Nachricht selbst bleibt leer.
   form.append(
     'payload_json',
     JSON.stringify({
       content: '',
+      embeds: [
+        {
+          title: 'Dropspots',
+          image: { url: `attachment://${name}` },
+          color: 0x45ff8f,
+        },
+      ],
       attachments: [{ id: 0, filename: name, description: 'Dropspots Karte' }],
     })
   );
