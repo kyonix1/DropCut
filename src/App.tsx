@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { MessageSquarePlus } from 'lucide-react';
+import { HelpCircle, MessageSquarePlus } from 'lucide-react';
 import Intro from './components/Intro';
 import LockPanel from './components/LockPanel';
 import MapView, { type Tool } from './components/MapView';
 import RequestPanel from './components/RequestPanel';
+import SetupGuide from './components/SetupGuide';
 import TextDialog from './components/TextDialog';
 import Toolbar from './components/Toolbar';
 import { EDIT_KEY, Norm } from './config';
@@ -24,6 +25,7 @@ import {
   saveDoc,
   submitRequest,
 } from './lib/spots';
+import { pushPreview } from './lib/renderPreview';
 
 type Mode = 'view' | 'edit' | 'request';
 
@@ -55,16 +57,35 @@ export default function App() {
   const [reqOpen, setReqOpen] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [reqBusy, setReqBusy] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const flash = (m: string) => {
     setToast(m);
     setTimeout(() => setToast(null), 3500);
   };
+
+  /** aktuelle Karten-URL (auch in Callbacks nutzbar) */
+  const currentMapUrl = () =>
+    !map || imgBroken ? null : imgIdx === 0 ? map.images.blank : map.images.pois;
+
+  /** Discord-Vorschau manuell hochladen */
+  const uploadPreview = useCallback(async () => {
+    if (uploading) return;
+    setUploading(true);
+    try {
+      const ok = await pushPreview(doc.shapes, currentMapUrl(), EDIT_KEY);
+      flash(ok ? 'Karte an Discord gesendet' : 'Upload fehlgeschlagen');
+    } catch {
+      flash('Upload fehlgeschlagen');
+    }
+    setUploading(false);
+  }, [doc, uploading]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -343,8 +364,6 @@ export default function App() {
     setAttempt((a) => a + 1);
   }, []);
 
-  const mapUrl = !map || imgBroken ? null : imgIdx === 0 ? map.images.blank : map.images.pois;
-
   // ── Was wird angezeigt? ──
   const preview = requests.find((r) => r.id === previewId) ?? null;
   const editShapes = preview ? preview.shapes : isRequest ? draftShapes : doc.shapes;
@@ -354,7 +373,7 @@ export default function App() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-abyss">
       <MapView
-        mapUrl={mapUrl}
+        mapUrl={currentMapUrl()}
         onImgError={() => (imgIdx === 0 ? setImgIdx(1) : setImgBroken(true))}
         baseShapes={baseShapes}
         shapes={editShapes}
@@ -453,7 +472,19 @@ export default function App() {
             }}
           />
         </div>
+
+        {/* Setup-Tutorial */}
+        <button
+          type="button"
+          title="Setup Tutorial öffnen"
+          onClick={() => setGuideOpen(true)}
+          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-volt/15 bg-abyss/90 text-haze/80 transition-colors hover:border-volt/50 hover:text-volt"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </button>
       </div>
+
+      <SetupGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
 
       <Toolbar
         visible={editing && !preview}
@@ -471,6 +502,8 @@ export default function App() {
         saved={saved}
         dirty={isRequest ? draftShapes.length > 0 : dirty}
         count={editShapes.length}
+        onUpload={uploadPreview}
+        uploading={uploading}
         requestMode={isRequest}
         onCancelRequest={() => {
           setMode('view');

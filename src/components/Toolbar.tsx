@@ -11,6 +11,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  Upload,
   X,
 } from 'lucide-react';
 import { COLORS, MarkColor } from '../lib/spots';
@@ -35,6 +36,8 @@ interface Props {
   /** Request-Modus: Abschicken statt Speichern */
   requestMode?: boolean;
   onCancelRequest?: () => void;
+  onUpload?: () => void;
+  uploading?: boolean;
 }
 
 const TOOLS: { id: Tool; icon: React.ComponentType<{ className?: string }>; label: string }[] = [
@@ -164,6 +167,22 @@ export default function Toolbar(p: Props) {
                     : 'Speichern'}
             </span>
           </button>
+
+          {/* Upload — Karte manuell an Discord senden */}
+          {!p.requestMode && p.onUpload && (
+            <button
+              type="button"
+              title="Karte als Bild an Discord senden"
+              onClick={p.onUpload}
+              disabled={p.uploading}
+              className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-volt/25 px-3 text-haze/80 transition-colors hover:border-volt/60 hover:text-volt disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Upload className={`h-4 w-4 ${p.uploading ? 'animate-pulse' : ''}`} />
+              <span className="num text-[10px] uppercase tracking-[0.16em]">
+                {p.uploading ? 'Lädt' : 'Upload'}
+              </span>
+            </button>
+          )}
 
           {p.requestMode && (
             <button

@@ -80,9 +80,23 @@ sich alle 20 Sekunden und beim Zurückkehren in den Browser-Tab.
 
 ## Discord Map Preview
 
-Einmal pro Minute wird die Karte mit allen Markierungen als Bild in einen
-Discord-Channel gesendet. Die Nachricht besteht **nur aus dem Bild** und wird
-nach dem ersten Senden bei jeder Änderung **bearbeitet** statt neu gesendet.
+Über den **Upload**-Button in der Werkzeugleiste (neben Speichern) wird die
+aktuelle Karte als Bild an Discord gesendet — nur manuell, nie automatisch.
+
+```
+Upload-Button
+   → Browser rendert Karte + alle Formen (inkl. Text) als PNG
+   → POST /api/discord-preview
+   → Discord-Nachricht wird gesendet bzw. bearbeitet
+```
+
+- Beim ersten Upload wird die Nachricht erstellt
+- Bei jedem weiteren Upload wird **dieselbe Nachricht bearbeitet**
+- Die Nachricht besteht nur aus dem Bild
+- Wird sie in Discord gelöscht, sendet der nächste Upload einfach eine neue
+
+Das Bild wird im Browser gerendert. Dadurch ist der **Text mit schwarzem
+Umriss exakt so sichtbar wie auf der Website**.
 
 ```
 api/discord-preview.js   rendert das PNG und hält die Discord-Nachricht aktuell
@@ -98,8 +112,12 @@ api/discord-preview.js   rendert das PNG und hält die Discord-Nachricht aktuell
 3. Neu deployen
 
 Der Webhook steht aus Sicherheitsgruenden nicht im Quellcode. Falls ein Webhook
-einmal im Code, Chat oder GitHub-Repository veroeffentlicht wurde, muss er in
-Discord geloescht und neu erstellt werden.
+einmal im Code, Chat oder GitHub-Repository veroeffentlicht wurde: Diesen
+Webhook in Discord loeschen und einen neuen erstellen.
+
+Auf der Website kann das Tutorial über das **Hilfe-Button (?)** rechts oben
+geöffnet werden. Es führt nacheinander durch: Webhook erstellen → Blob Store
+verbinden → Secrets setzen → Redeploy → Test → externen Minuten-Cron.
 
 ### Testen
 
