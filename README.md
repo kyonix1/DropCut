@@ -115,10 +115,6 @@ Der Webhook steht aus Sicherheitsgruenden nicht im Quellcode. Falls ein Webhook
 einmal im Code, Chat oder GitHub-Repository veroeffentlicht wurde: Diesen
 Webhook in Discord loeschen und einen neuen erstellen.
 
-Auf der Website kann das Tutorial über das **Hilfe-Button (?)** rechts oben
-geöffnet werden. Es führt nacheinander durch: Webhook erstellen → Blob Store
-verbinden → Secrets setzen → Redeploy → Test → externen Minuten-Cron.
-
 ### Testen
 
 ```text

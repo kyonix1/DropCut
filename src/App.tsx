@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { HelpCircle, MessageSquarePlus } from 'lucide-react';
+import { MessageSquarePlus } from 'lucide-react';
 import Intro from './components/Intro';
 import LockPanel from './components/LockPanel';
 import MapView, { type Tool } from './components/MapView';
 import RequestPanel from './components/RequestPanel';
-import SetupGuide from './components/SetupGuide';
 import TextDialog from './components/TextDialog';
 import Toolbar from './components/Toolbar';
 import { EDIT_KEY, Norm } from './config';
@@ -57,7 +56,6 @@ export default function App() {
   const [reqOpen, setReqOpen] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [reqBusy, setReqBusy] = useState(false);
-  const [guideOpen, setGuideOpen] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -473,18 +471,7 @@ export default function App() {
           />
         </div>
 
-        {/* Setup-Tutorial */}
-        <button
-          type="button"
-          title="Setup Tutorial öffnen"
-          onClick={() => setGuideOpen(true)}
-          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-volt/15 bg-abyss/90 text-haze/80 transition-colors hover:border-volt/50 hover:text-volt"
-        >
-          <HelpCircle className="h-4 w-4" />
-        </button>
       </div>
-
-      <SetupGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
 
       <Toolbar
         visible={editing && !preview}
